@@ -117,8 +117,8 @@ def ffmpeg_process(args, video_format, video_metadata, file_path, env):
                 while frame_data is not None:
                     proc.stdin.write(frame_data)
                     #TODO: skip flush for increased speed
+                    proc.stdin.flush()
                     frame_data = yield
-                proc.stdin.flush()
                 proc.stdin.close()
                 res = proc.stderr.read()
             except BrokenPipeError as e:
@@ -138,8 +138,8 @@ def ffmpeg_process(args, video_format, video_metadata, file_path, env):
             try:
                 while frame_data is not None:
                     proc.stdin.write(frame_data)
+                    proc.stdin.flush()
                     frame_data = yield
-                proc.stdin.flush()
                 proc.stdin.close()
                 res = proc.stderr.read()
             except BrokenPipeError as e:
@@ -148,13 +148,6 @@ def ffmpeg_process(args, video_format, video_metadata, file_path, env):
                         + res.decode("utf-8"))
     if len(res) > 0:
         print(res.decode("utf-8"), end="", file=sys.stderr)
-
-def to_pingpong(inp):
-    if not hasattr(inp, "__getitem__"):
-        inp = list(inp)
-    yield from inp
-    for i in range(len(inp)-2,0,-1):
-        yield inp[i]
 
 class VideoCombine:
     @classmethod
@@ -168,7 +161,7 @@ class VideoCombine:
             "required": {
                 "images": ("IMAGE",),
                 "frame_rate": (
-                    "FLOAT",
+                    "INT",
                     {"default": 8, "min": 1, "step": 1},
                 ),
                 "loop_count": ("INT", {"default": 0, "min": 0, "max": 100, "step": 1}),
@@ -282,15 +275,16 @@ class VideoCombine:
                 image_kwargs['exif'] = exif
             file = f"{filename}_{counter:05}.{format_ext}"
             file_path = os.path.join(full_output_folder, file)
+            images = tensor_to_bytes(images)
             if pingpong:
-                images = to_pingpong(images)
-            frames = map(lambda x : Image.fromarray(tensor_to_bytes(x)), images)
+                images = np.concatenate((images, images[-2:0:-1]))
+            frames = [Image.fromarray(f) for f in images]
             # Use pillow directly to save an animated image
-            next(frames).save(
+            frames[0].save(
                 file_path,
                 format=format_ext.upper(),
                 save_all=True,
-                append_images=frames,
+                append_images=frames[1:],
                 duration=round(1000 / frame_rate),
                 loop=loop_count,
                 compress_level=4,
@@ -322,30 +316,26 @@ class VideoCombine:
                     logger.warn("Extra format values were not provided, the following defaults will be used: " + str(kwargs) + "\nThis is likely due to usage of ComfyUI-to-python. These values can be manually set by supplying a manual_format_widgets argument")
 
             video_format = apply_format_widgets(format_ext, kwargs)
-            has_alpha = images[0].shape[-1] == 4
-            dimensions = f"{len(images[0][0])}x{len(images[0])}"
-            if loop_count > 0:
-                loop_args = ["-vf", "loop=loop=" + str(loop_count)+":size=" + str(len(images))]
-            else:
-                loop_args = []
-            if pingpong:
-                if batch_manager is not None:
-                    logger.error("pingpong is incompatible with batched output")
-                images = to_pingpong(images)
             if video_format.get('input_color_depth', '8bit') == '16bit':
-                images = map(tensor_to_shorts, images)
-                if has_alpha:
+                images = tensor_to_shorts(images)
+                if images.shape[-1] == 4:
                     i_pix_fmt = 'rgba64'
                 else:
                     i_pix_fmt = 'rgb48'
             else:
-                images = map(tensor_to_bytes, images)
-                if has_alpha:
+                images = tensor_to_bytes(images)
+                if images.shape[-1] == 4:
                     i_pix_fmt = 'rgba'
                 else:
                     i_pix_fmt = 'rgb24'
+            if pingpong:
+                if batch_manager is not None:
+                    logger.error("pingpong is incompatible with batched output")
+                images = np.concatenate((images, images[-2:0:-1]))
             file = f"{filename}_{counter:05}.{video_format['extension']}"
             file_path = os.path.join(full_output_folder, file)
+            dimensions = f"{len(images[0][0])}x{len(images[0])}"
+            loop_args = ["-vf", "loop=loop=" + str(loop_count)+":size=" + str(len(images))]
             bitrate_arg = []
             bitrate = video_format.get('bitrate')
             if bitrate is not None:
@@ -365,8 +355,7 @@ class VideoCombine:
                 if batch_manager is not None:
                     batch_manager.outputs[unique_id] = (counter, output_process)
 
-            for image in images:
-                output_process.send(image.tobytes())
+            output_process.send(images.tobytes())
             if batch_manager is not None:
                 requeue_workflow((batch_manager.unique_id, not batch_manager.has_closed_inputs))
             if batch_manager is None or batch_manager.has_closed_inputs:
@@ -571,110 +560,6 @@ class BatchManager:
         return (self,)
 
 
-class VideoInfo:
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-                "required": {
-                    "video_info": ("VHS_VIDEOINFO",),
-                    }
-                }
-
-    CATEGORY = "Video Helper Suite 🎥🅥🅗🅢"
-
-    RETURN_TYPES = ("FLOAT","INT", "FLOAT", "INT", "INT", "FLOAT","INT", "FLOAT", "INT", "INT")
-    RETURN_NAMES = (
-        "source_fps🟨",
-        "source_frame_count🟨",
-        "source_duration🟨",
-        "source_width🟨",
-        "source_height🟨",
-        "loaded_fps🟦",
-        "loaded_frame_count🟦",
-        "loaded_duration🟦",
-        "loaded_width🟦",
-        "loaded_height🟦",
-    )
-    FUNCTION = "get_video_info"
-
-    def get_video_info(self, video_info):
-        keys = ["fps", "frame_count", "duration", "width", "height"]
-        
-        source_info = []
-        loaded_info = []
-
-        for key in keys:
-            source_info.append(video_info[f"source_{key}"])
-            loaded_info.append(video_info[f"loaded_{key}"])
-
-        return (*source_info, *loaded_info)
-
-
-class VideoInfoSource:
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-                "required": {
-                    "video_info": ("VHS_VIDEOINFO",),
-                    }
-                }
-
-    CATEGORY = "Video Helper Suite 🎥🅥🅗🅢"
-
-    RETURN_TYPES = ("FLOAT","INT", "FLOAT", "INT", "INT",)
-    RETURN_NAMES = (
-        "fps🟨",
-        "frame_count🟨",
-        "duration🟨",
-        "width🟨",
-        "height🟨",
-    )
-    FUNCTION = "get_video_info"
-
-    def get_video_info(self, video_info):
-        keys = ["fps", "frame_count", "duration", "width", "height"]
-        
-        source_info = []
-
-        for key in keys:
-            source_info.append(video_info[f"source_{key}"])
-
-        return (*source_info,)
-
-
-class VideoInfoLoaded:
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-                "required": {
-                    "video_info": ("VHS_VIDEOINFO",),
-                    }
-                }
-
-    CATEGORY = "Video Helper Suite 🎥🅥🅗🅢"
-
-    RETURN_TYPES = ("FLOAT","INT", "FLOAT", "INT", "INT",)
-    RETURN_NAMES = (
-        "fps🟦",
-        "frame_count🟦",
-        "duration🟦",
-        "width🟦",
-        "height🟦",
-    )
-    FUNCTION = "get_video_info"
-
-    def get_video_info(self, video_info):
-        keys = ["fps", "frame_count", "duration", "width", "height"]
-        
-        loaded_info = []
-
-        for key in keys:
-            loaded_info.append(video_info[f"loaded_{key}"])
-
-        return (*loaded_info,)
-
-
-
 NODE_CLASS_MAPPINGS = {
     "VHS_VideoCombine": VideoCombine,
     "VHS_LoadVideo": LoadVideoUpload,
@@ -684,9 +569,6 @@ NODE_CLASS_MAPPINGS = {
     "VHS_LoadAudio": LoadAudio,
     "VHS_PruneOutputs": PruneOutputs,
     "VHS_BatchManager": BatchManager,
-    "VHS_VideoInfo": VideoInfo,
-    "VHS_VideoInfoSource": VideoInfoSource,
-    "VHS_VideoInfoLoaded": VideoInfoLoaded,
     # Latent and Image nodes
     "VHS_SplitLatents": SplitLatents,
     "VHS_SplitImages": SplitImages,
@@ -716,9 +598,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "VHS_LoadAudio": "Load Audio (Path)🎥🅥🅗🅢",
     "VHS_PruneOutputs": "Prune Outputs 🎥🅥🅗🅢",
     "VHS_BatchManager": "Batch Manager 🎥🅥🅗🅢",
-    "VHS_VideoInfo": "Video Info 🎥🅥🅗🅢",
-    "VHS_VideoInfoSource": "Video Info (Source) 🎥🅥🅗🅢",
-    "VHS_VideoInfoLoaded": "Video Info (Loaded) 🎥🅥🅗🅢",
     # Latent and Image nodes
     "VHS_SplitLatents": "Split Latent Batch 🎥🅥🅗🅢",
     "VHS_SplitImages": "Split Image Batch 🎥🅥🅗🅢",

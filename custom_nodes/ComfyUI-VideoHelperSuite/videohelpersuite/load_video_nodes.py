@@ -4,6 +4,7 @@ import numpy as np
 import torch
 from PIL import Image, ImageOps
 import cv2
+from typing import Union, List, Tuple, Dict
 
 import folder_paths
 from comfy.utils import common_upscale
@@ -19,7 +20,7 @@ def is_gif(filename) -> bool:
     return len(file_parts) > 1 and file_parts[-1] == "gif"
 
 
-def target_size(width, height, force_size, custom_width, custom_height):
+def target_size(width, height, force_size, custom_width, custom_height) -> Tuple[int, int]:
     if force_size == "Custom":
         return (custom_width, custom_height)
     elif force_size == "Custom Height":
@@ -45,76 +46,70 @@ def target_size(width, height, force_size, custom_width, custom_height):
 
 def cv_frame_generator(video, force_rate, frame_load_cap, skip_first_frames,
                        select_every_nth, batch_manager=None, unique_id=None):
-    video_cap = cv2.VideoCapture(video)
-    if not video_cap.isOpened():
-        raise ValueError(f"{video} could not be loaded with cv.")
-
-    # extract video metadata
-    fps = video_cap.get(cv2.CAP_PROP_FPS)
-    width = int(video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total_frames = int(video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    duration = total_frames / fps
-
-    # set video_cap to look at start_index frame
-    total_frame_count = 0
-    total_frames_evaluated = -1
-    frames_added = 0
-    base_frame_time = 1 / fps
-    prev_frame = None
-
-    if force_rate == 0:
-        target_frame_time = base_frame_time
-    else:
-        target_frame_time = 1/force_rate
-
-    yield (width, height, fps, duration, total_frames, target_frame_time)
-
-    time_offset=target_frame_time - base_frame_time
-    while video_cap.isOpened():
-        if time_offset < target_frame_time:
-            is_returned = video_cap.grab()
-            # if didn't return frame, video has ended
-            if not is_returned:
-                break
-            time_offset += base_frame_time
-        if time_offset < target_frame_time:
-            continue
-        time_offset -= target_frame_time
-        # if not at start_index, skip doing anything with frame
-        total_frame_count += 1
-        if total_frame_count <= skip_first_frames:
-            continue
+    try:
+        video_cap = cv2.VideoCapture(video)
+        if not video_cap.isOpened():
+            raise ValueError(f"{video} could not be loaded with cv.")
+        # set video_cap to look at start_index frame
+        total_frame_count = 0
+        total_frames_evaluated = -1
+        frames_added = 0
+        base_frame_time = 1/video_cap.get(cv2.CAP_PROP_FPS)
+        width = video_cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+        height = video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        prev_frame = None
+        if force_rate == 0:
+            target_frame_time = base_frame_time
         else:
-            total_frames_evaluated += 1
+            target_frame_time = 1/force_rate
+        yield (width, height, target_frame_time)
+        time_offset=target_frame_time - base_frame_time
+        while video_cap.isOpened():
+            if time_offset < target_frame_time:
+                is_returned = video_cap.grab()
+                # if didn't return frame, video has ended
+                if not is_returned:
+                    break
+                time_offset += base_frame_time
+            if time_offset < target_frame_time:
+                continue
+            time_offset -= target_frame_time
+            # if not at start_index, skip doing anything with frame
+            total_frame_count += 1
+            if total_frame_count <= skip_first_frames:
+                continue
+            else:
+                total_frames_evaluated += 1
 
-        # if should not be selected, skip doing anything with frame
-        if total_frames_evaluated%select_every_nth != 0:
-            continue
+            # if should not be selected, skip doing anything with frame
+            if total_frames_evaluated%select_every_nth != 0:
+                continue
 
-        # opencv loads images in BGR format (yuck), so need to convert to RGB for ComfyUI use
-        # follow up: can videos ever have an alpha channel?
-        # To my testing: No. opencv has no support for alpha
-        unused, frame = video_cap.retrieve()
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        # convert frame to comfyui's expected format
-        # TODO: frame contains no exif information. Check if opencv2 has already applied
-        frame = np.array(frame, dtype=np.float32) / 255.0
+            # opencv loads images in BGR format (yuck), so need to convert to RGB for ComfyUI use
+            # follow up: can videos ever have an alpha channel?
+            # To my testing: No. opencv has no support for alpha
+            unused, frame = video_cap.retrieve()
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # convert frame to comfyui's expected format
+            # TODO: frame contains no exif information. Check if opencv2 has already applied
+            frame = np.array(frame, dtype=np.float32) / 255.0
+            if prev_frame is not None:
+                inp  = yield prev_frame
+                if inp is not None:
+                    #ensure the finally block is called
+                    return
+            prev_frame = frame
+            frames_added += 1
+            # if cap exists and we've reached it, stop processing frames
+            if frame_load_cap > 0 and frames_added >= frame_load_cap:
+                break
+        if batch_manager is not None:
+            batch_manager.inputs.pop(unique_id)
+            batch_manager.has_closed_inputs = True
         if prev_frame is not None:
-            inp  = yield prev_frame
-            if inp is not None:
-                #ensure the finally block is called
-                return
-        prev_frame = frame
-        frames_added += 1
-        # if cap exists and we've reached it, stop processing frames
-        if frame_load_cap > 0 and frames_added >= frame_load_cap:
-            break
-    if batch_manager is not None:
-        batch_manager.inputs.pop(unique_id)
-        batch_manager.has_closed_inputs = True
-    if prev_frame is not None:
-        yield prev_frame
+            yield prev_frame
+    finally:
+        video_cap.release()
 
 def load_video_cv(video: str, force_rate: int, force_size: str,
                   custom_width: int,custom_height: int, frame_load_cap: int,
@@ -123,14 +118,13 @@ def load_video_cv(video: str, force_rate: int, force_size: str,
     if batch_manager is None or unique_id not in batch_manager.inputs:
         gen = cv_frame_generator(video, force_rate, frame_load_cap, skip_first_frames,
                                  select_every_nth, batch_manager, unique_id)
-        (width, height, fps, duration, total_frames, target_frame_time) = next(gen)
-
+        (width, height, target_frame_time) = next(gen)
+        width = int(width)
+        height = int(height)
         if batch_manager is not None:
-            batch_manager.inputs[unique_id] = (gen, width, height, fps, duration, total_frames, target_frame_time)
-
+            batch_manager.inputs[unique_id] = (gen, width, height, target_frame_time)
     else:
-        (gen, width, height, fps, duration, total_frames, target_frame_time) = batch_manager.inputs[unique_id]
-
+        (gen, width, height, target_frame_time) = batch_manager.inputs[unique_id]
     if batch_manager is not None:
         gen = itertools.islice(gen, batch_manager.frames_per_batch)
 
@@ -148,22 +142,7 @@ def load_video_cv(video: str, force_rate: int, force_size: str,
     #Setup lambda for lazy audio capture
     audio = lambda : get_audio(video, skip_first_frames * target_frame_time,
                                frame_load_cap*target_frame_time*select_every_nth)
-    #Adjust target_frame_time for select_every_nth
-    target_frame_time *= select_every_nth
-    video_info = {
-        "source_fps": fps,
-        "source_frame_count": total_frames,
-        "source_duration": duration,
-        "source_width": width,
-        "source_height": height,
-        "loaded_fps": 1/target_frame_time,
-        "loaded_frame_count": len(images),
-        "loaded_duration": len(images) * target_frame_time,
-        "loaded_width": images.shape[2],
-        "loaded_height": images.shape[1],
-    }
-
-    return (images, len(images), lazy_eval(audio), video_info)
+    return (images, len(images), lazy_eval(audio))
 
 
 class LoadVideoUpload:
@@ -196,9 +175,8 @@ class LoadVideoUpload:
 
     CATEGORY = "Video Helper Suite 🎥🅥🅗🅢"
 
-    RETURN_TYPES = ("IMAGE", "INT", "VHS_AUDIO", "VHS_VIDEOINFO",)
-    RETURN_NAMES = ("IMAGE", "frame_count", "audio", "video_info",)
-
+    RETURN_TYPES = ("IMAGE", "INT", "VHS_AUDIO", )
+    RETURN_NAMES = ("IMAGE", "frame_count", "audio",)
     FUNCTION = "load_video"
 
     def load_video(self, **kwargs):
@@ -241,9 +219,8 @@ class LoadVideoPath:
 
     CATEGORY = "Video Helper Suite 🎥🅥🅗🅢"
 
-    RETURN_TYPES = ("IMAGE", "INT", "VHS_AUDIO", "VHS_VIDEOINFO",)
-    RETURN_NAMES = ("IMAGE", "frame_count", "audio", "video_info",)
-
+    RETURN_TYPES = ("IMAGE", "INT", "VHS_AUDIO", )
+    RETURN_NAMES = ("IMAGE", "frame_count", "audio",)
     FUNCTION = "load_video"
 
     def load_video(self, **kwargs):

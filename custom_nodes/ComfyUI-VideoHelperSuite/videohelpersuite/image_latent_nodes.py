@@ -1,5 +1,6 @@
 from torch import Tensor
 import torch
+from typing import Union, List, Tuple, Dict
 
 import comfy.utils
 
@@ -390,7 +391,7 @@ class DuplicateLatents:
     RETURN_NAMES = ("LATENT", "count",)
     FUNCTION = "duplicate_input"
 
-    def duplicate_input(self, latents, multiply_by: int):
+    def duplicate_input(self, latents: Dict[str, Tensor], multiply_by: int):
         new_latents = latents.copy()
         full_latents = []
         for n in range(0, multiply_by):
