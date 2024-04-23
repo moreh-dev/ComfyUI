@@ -1,0 +1,9 @@
+timm==0.6.13
+transformers
+fairscale
+pycocoevalcap
+opencv-python
+qrcode[pil]
+pytorch_lightning
+kornia
+pydantic
