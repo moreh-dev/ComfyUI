@@ -8,6 +8,26 @@ import os
 import comfy
 import nodes
 from folder_paths import base_path
+# import ultralytics
+
+# def verbose(self):
+#     """Return log string for each task."""
+#     log_string = ""
+#     probs = self.probs
+#     boxes = self.boxes
+#     if len(self) == 0:
+#         return log_string if probs is not None else f"{log_string}(no detections), "
+#     if probs is not None:
+#         log_string += f"{', '.join(f'{self.names[j]} {probs.data[j]:.2f}' for j in probs.top5)}, "
+#     if boxes:
+#         boxes_tmp = boxes.cls.detach().clone().cpu()
+#         for c in boxes_tmp.unique():
+#             n = (boxes_tmp == c).sum()  # detections per class
+#             log_string += f"{n} {self.names[int(c)]}{'s' * (n > 1)}, "
+#     return log_string
+
+# ultralytics.engine.results.Results.verbose = verbose
+
 
 face_model_path = os.path.join(base_path, "models/dz_facedetailer/yolo/face_yolov8n.pt")
 MASK_CONTROL = ["dilate", "erode", "disabled"]

@@ -1,4 +1,4 @@
-/__pycache__/
+__pycache__
 *.py[cod]
 /output/
 /input/
@@ -18,3 +18,5 @@ venv/
 
 *.pt
 *.safetensors
+
+*.log

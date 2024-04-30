@@ -8,6 +8,11 @@ from tqdm.auto import trange, tqdm
 
 from . import utils
 
+def _randn(size, dtype, device, seed):
+    generator = torch.Generator('cpu').manual_seed(int(seed))
+    return torch.randn(size, dtype=dtype, device=device, generator=generator)
+
+torchsde._brownian.brownian_interval._randn = _randn
 
 def append_zero(x):
     return torch.cat([x, x.new_zeros([1])])
