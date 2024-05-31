@@ -6,4 +6,5 @@ wildcards/**
 subpack
 impact_subpack
 *.txt
+!requirements.txt
 *.yaml
