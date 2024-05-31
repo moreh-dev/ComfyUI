@@ -692,7 +692,7 @@ def warp(image: torch.Tensor, flow: torch.Tensor) -> torch.Tensor:
     Returns:
       A warped image.
     """
-    flow = -flow.flip(1)
+    flow = -flow.flip([1])
 
     dtype = flow.dtype
     device = flow.device
@@ -770,15 +770,25 @@ def concatenate_pyramids(pyramid1: List[torch.Tensor],
         result.append(torch.cat([features1, features2], dim=1))
     return result
 
+class TempPad(nn.Conv2d):
+    def __init__(self, *args, **kwargs):
+        super().__init__( *args, **kwargs)
+        self.temp_size = kwargs["kernel_size"]
+
+    def forward(self, x):
+        if self.temp_size == 2:
+            x = F.pad(x, [1,0,1,0])
+        return super().forward(x)
 
 def conv(in_channels, out_channels, size, activation: Optional[str] = 'relu'):
     # Since PyTorch doesn't have an in-built activation in Conv2d, we use a
     # Sequential layer to combine Conv2d and Leaky ReLU in one module.
-    _conv = nn.Conv2d(
+
+    _conv = TempPad(
         in_channels=in_channels,
         out_channels=out_channels,
         kernel_size=size,
-        padding='same')
+        padding=(size-1)//2)
     if activation is None:
         return _conv
     assert activation == 'relu'

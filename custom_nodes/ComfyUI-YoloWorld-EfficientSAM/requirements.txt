@@ -1,0 +1,3 @@
+inference-gpu[yolo-world]==0.11.2
+supervision==0.20.0
+setuptools==69.5.1

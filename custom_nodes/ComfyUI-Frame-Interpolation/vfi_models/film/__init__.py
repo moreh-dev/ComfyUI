@@ -6,6 +6,7 @@ import typing
 from vfi_utils import InterpolationStateList, load_file_from_github_release, preprocess_frames, postprocess_frames
 import pathlib
 import gc
+from .film_arch import Interpolator
 
 MODEL_TYPE = pathlib.Path(__file__).parent.name
 DEVICE = get_torch_device()
@@ -39,7 +40,7 @@ def inference(model, img_batch_1, img_batch_2, inter_frames):
         results.insert(insert_position, prediction.clamp(0, 1).float())
         del remains[step]
 
-    return [tensor.flip(0) for tensor in results]
+    return [tensor.flip([0]) for tensor in results]
 
 class FILM_VFI:
     @classmethod
@@ -71,7 +72,10 @@ class FILM_VFI:
     ):
         interpolation_states = optional_interpolation_states
         model_path = load_file_from_github_release(MODEL_TYPE, ckpt_name)
-        model = torch.jit.load(model_path, map_location='cpu')
+        ckpt = torch.load(model_path, map_location='cpu')
+        model = Interpolator()
+        model.load_state_dict(ckpt.state_dict())
+
         model.eval()
         model = model.to(DEVICE)
         dtype = torch.float32
